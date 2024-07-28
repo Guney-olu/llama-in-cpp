@@ -1,7 +1,9 @@
 # Loading llama weights using Pure C++
 
+**Setup the Path for yout model.bin and tokeiner in the llama-run.cpp**
+
 ```bash
-g++ -o transformer llama-run.cpp -std=c++11
+g++ -o transformer deprecated/llama-run.cpp -std=c++11 
 ./transformer
 ```
 ## unsorted todos

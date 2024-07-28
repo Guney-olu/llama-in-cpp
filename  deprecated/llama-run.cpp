@@ -1,3 +1,8 @@
+/* 
+TODO
+Fixing the main issues and making it more readable
+*/
+
 #include <iostream>
 #include <cstdlib>
 #include <fstream>
@@ -130,7 +135,7 @@ void memory_map_weights(TransformerWeights& w, const Config& p, float* ptr, int 
 void read_checkpoint(const char* checkpoint, Config& config, TransformerWeights& weights, int& fd, float*& data, ssize_t& file_size) {
     ifstream file(checkpoint, ios::binary);
     if (!file.is_open()) {
-        cerr << "Couldn't open file " << checkpoint << endl;
+        cerr << "Couldn't open file which contain weights" << checkpoint << endl;
         exit(EXIT_FAILURE);
     }
 
@@ -148,7 +153,7 @@ void read_checkpoint(const char* checkpoint, Config& config, TransformerWeights&
 
     fd = open(checkpoint, O_RDONLY);
     if (fd == -1) {
-        cerr << "open failed!" << endl;
+        cerr << "open failed!!" << endl;
         exit(EXIT_FAILURE);
     }
 
