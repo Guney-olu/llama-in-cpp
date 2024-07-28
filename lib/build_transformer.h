@@ -9,6 +9,9 @@
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include "helpers.h"
+#include "/usr/local/Cellar/libomp/18.1.8/include/omp.h"
+
 
 using namespace std;
 
@@ -181,5 +184,108 @@ void free_transformer(Transformer& t) {
     }
     free_run_state(t.state);
 }
+
+
+//Doing the forward pass
+float* forward(Transformer* transformer, int token, int pos) {
+
+    // Convenience variables
+    Config* p = &transformer->config;
+    TransformerWeights* w = &transformer->weights;
+    State* s = &transformer->state;
+    float *x = s->x;
+    int dim = p->dim;
+    int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
+    int kv_mul = p->n_heads / p->n_kv_heads;
+    int hidden_dim = p->hidden_dim;
+    int head_size = dim / p->n_heads;
+
+    float* content_row = w->token_embedding_table + token * dim;
+    memcpy(x, content_row, dim * sizeof(float));
+
+    // Forwarding  all the layers
+    for (unsigned long long l = 0; l < p->n_layers; l++) {
+
+        rmsnorm(s->xb, x, w->rms_att_weight + l * dim, dim);
+
+        int loff = l * p->seq_len * kv_dim;
+        s->k = s->key_cache + loff + pos * kv_dim;
+        s->v = s->value_cache + loff + pos * kv_dim;
+
+        matmul(s->q, s->xb, w->wq + l * dim * dim, dim, dim);
+        matmul(s->k, s->xb, w->wk + l * dim * kv_dim, dim, kv_dim);
+        matmul(s->v, s->xb, w->wv + l * dim * kv_dim, dim, kv_dim);
+
+        for (int i = 0; i < dim; i += 2) {
+            int head_dim = i % head_size;
+            float freq = 1.0f / std::pow(10000.0f, head_dim / (float)head_size);
+            float val = pos * freq;
+            float fcr = std::cos(val);
+            float fci = std::sin(val);
+            int rotn = i < kv_dim ? 2 : 1;
+            for (int v = 0; v < rotn; v++) {
+                float* vec = v == 0 ? s->q : s->k;
+                float v0 = vec[i];
+                float v1 = vec[i + 1];
+                vec[i] = v0 * fcr - v1 * fci;
+                vec[i + 1] = v0 * fci + v1 * fcr;
+            }
+        }
+        #pragma omp parallel for
+        for (int h = 0; h < p->n_heads; h++) {
+            float* q = s->q + h * head_size;
+            float* att = s->att + h * p->seq_len;
+            for (int t = 0; t <= pos; t++) {
+                float* k = s->key_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
+                float score = 0.0f;
+                for (int i = 0; i < head_size; i++) {
+                    score += q[i] * k[i];
+                }
+                score /= std::sqrt(head_size);
+                att[t] = score;
+            }
+            softmax(att, pos + 1);
+            float* xb = s->xb + h * head_size;
+            std::memset(xb, 0, head_size * sizeof(float));
+            for (int t = 0; t <= pos; t++) {
+                float* v = s->value_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
+                float a = att[t];
+                for (int i = 0; i < head_size; i++) {
+                    xb[i] += a * v[i];
+                }
+            }
+        }
+        matmul(s->xb2, s->xb, w->wo + l * dim * dim, dim, dim);
+
+        for (int i = 0; i < dim; i++) {
+            x[i] += s->xb2[i];
+        }
+
+        rmsnorm(s->xb, x, w->rms_ffn_weight + l * dim, dim);
+        matmul(s->hb, s->xb, w->w1 + l * dim * hidden_dim, dim, hidden_dim);
+        matmul(s->hb2, s->xb, w->w3 + l * dim * hidden_dim, dim, hidden_dim);
+
+        // Applying SwiGLU 
+        for (int i = 0; i < hidden_dim; i++) {
+            float val = s->hb[i];
+            val *= 1.0f / (1.0f + std::exp(-val));
+            val *= s->hb2[i];
+            s->hb[i] = val;
+        }
+        matmul(s->xb, s->hb, w->w2 + l * dim * hidden_dim, hidden_dim, dim);
+
+        for (int i = 0; i < dim; i++) {
+            x[i] += s->xb[i];
+        }
+    }
+    rmsnorm(x, x, w->rms_final_weight, dim);
+    // Classification into logits
+    matmul(s->logits, x, w->wcls, p->dim, p->vocab_size);
+    return s->logits;
+}
+
+
+
+
 
 #endif
