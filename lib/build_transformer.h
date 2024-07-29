@@ -8,6 +8,7 @@
 #include <cmath>
 #include <sys/mman.h>
 #include <fcntl.h>
+#include <typeinfo>
 #include <unistd.h>
 #include "helpers.h"
 #include "/usr/local/Cellar/libomp/18.1.8/include/omp.h"
@@ -26,21 +27,37 @@ struct Config {
 };
 
 struct TransformerWeights {
-    float* token_embedding_table;
-    float* rms_att_weight;
-    float* rms_ffn_weight;
+    float* token_embedding_table; //token_embedding_table: model.embed_tokens.weight
+    float* rms_att_weight; //rms_att_weight: model.layers.<layer_index>.input_layernorm.weight
+    float* rms_ffn_weight; //rms_ffn_weight: model.layers.<layer_index>.post_attention_layernorm.weight
 
-    float* wq;
-    float* wk;
-    float* wv;
-    float* wo;
+    float* wq; //model.layers.<layer_index>.self_attn.q_proj.weight
+    float* wk; //wk: model.layers.<layer_index>.self_attn.k_proj.weight
 
-    float* w1;
-    float* w2;
-    float* w3;
+    float* wv; //wv: model.layers.<layer_index>.self_attn.v_proj.weight
+    float* wo; //wo: model.layers.<layer_index>.self_attn.o_proj.weight
 
-    float* rms_final_weight;
-    float* wcls;
+    float* w1; //w1: model.layers.<layer_index>.mlp.gate_proj.weight
+    float* w2; //w2: model.layers.<layer_index>.mlp.up_proj.weight
+    float* w3; //w3: model.layers.<layer_index>.mlp.down_proj.weight
+
+    float* rms_final_weight; //rms_final_weight: model.norm.weight
+    float* wcls; //lm_head.weight
+
+    /* 
+    model.embed_tokens.weight → TransformerWeights.token_embedding_table
+    model.layers.0.self_attn.q_proj.weight → TransformerWeights.wq
+    model.layers.0.self_attn.k_proj.weight → TransformerWeights.wk
+    model.layers.0.self_attn.v_proj.weight → TransformerWeights.wv
+    model.layers.0.self_attn.o_proj.weight → TransformerWeights.wo
+    model.layers.0.mlp.gate_proj.weight → TransformerWeights.w1
+    model.layers.0.mlp.up_proj.weight → TransformerWeights.w2
+    model.layers.0.mlp.down_proj.weight → TransformerWeights.w3
+    model.layers.0.input_layernorm.weight → TransformerWeights.rms_att_weight
+    model.layers.0.post_attention_layernorm.weight → TransformerWeights.rms_ffn_weight
+    model.norm.weight → TransformerWeights.rms_final_weight
+    lm_head.weight → TransformerWeights.wcls
+    */
 };
 
 struct State {
@@ -101,6 +118,7 @@ void free_run_state(State& s) {
     free(s.value_cache);
 }
 
+
 void memory_map_weights(TransformerWeights& w, const Config& p, float* ptr, int shared_weights) {
     int head_size = p.dim / p.n_heads;
     unsigned long long n_layers = p.n_layers;
@@ -142,12 +160,13 @@ void read_checkpoint(const char* checkpoint, Config& config, TransformerWeights&
         cerr << "Failed to read config" << endl;
         exit(EXIT_FAILURE);
     }
-
-    int shared_weights = config.vocab_size > 0 ? 1 : 0;
+    // int shared_weights = config.vocab_size > 0 ? 1 : 0;
     //config.vocab_size = abs(config.vocab_size);
 
     //overweritting the config fro tinyllama tests
     config.vocab_size = 32000;
+    int shared_weights = config.vocab_size > 0 ? 1 : 0;
+    config.vocab_size = abs(config.vocab_size);
     config.dim = 2048;
     config.n_heads = 32;
     config.n_kv_heads = 4;
@@ -181,15 +200,37 @@ void read_checkpoint(const char* checkpoint, Config& config, TransformerWeights&
 
     float* weights_ptr = data + sizeof(Config) / sizeof(float);
     memory_map_weights(weights, config, weights_ptr, shared_weights);
-    for (int i = 0; i < 10; ++i) {
-        std::cout << "Weight " << i << ": " << weights_ptr[i] << std::endl;
+
+    for (int i = 0; i < 5; ++i) {
+        cout << "Weight " << i << ": " << weights_ptr[i] << endl;
     }
 }
+
+void verify_weights(const TransformerWeights& w, const Config& p) {
+    // Print or verify a few values of each weight to check correctness
+    std::cout << "First few values of token_embedding_table:" << std::endl;
+    for (int i = 0; i < 5; ++i) {
+        std::cout << w.token_embedding_table[i] << " ";
+    }
+    std::cout << std::endl;
+
+    // Similarly, verify other weights...
+    std::cout << "First few values of rms_att_weight:" << std::endl;
+    for (int i = 0; i < 5; ++i) {
+        std::cout << w.rms_att_weight[i] << " ";
+    }
+    std::cout << std::endl;
+
+    // Add checks for other weights as necessary...
+}
+
 
 void build_transformer(Transformer& t, const char* checkpoint_path) {
     
     read_checkpoint(checkpoint_path, t.config, t.weights, t.fd, t.data, t.file_size);
     malloc_run_state(t.state, t.config);
+    verify_weights(t.weights, t.config);
+
 }
 
 void free_transformer(Transformer& t) {
@@ -219,16 +260,14 @@ float* forward(Transformer* transformer, int token, int pos) {
 
     float* content_row = w->token_embedding_table + token * dim;
     memcpy(x, content_row, dim * sizeof(float));
-
     // Forwarding  all the layers
     for (unsigned long long l = 0; l < p->n_layers; l++) {
 
         rmsnorm(s->xb, x, w->rms_att_weight + l * dim, dim);
-
         int loff = l * p->seq_len * kv_dim;
         s->k = s->key_cache + loff + pos * kv_dim;
         s->v = s->value_cache + loff + pos * kv_dim;
-
+    
         matmul(s->q, s->xb, w->wq + l * dim * dim, dim, dim);
         matmul(s->k, s->xb, w->wk + l * dim * kv_dim, dim, kv_dim);
         matmul(s->v, s->xb, w->wv + l * dim * kv_dim, dim, kv_dim);
@@ -237,8 +276,8 @@ float* forward(Transformer* transformer, int token, int pos) {
             int head_dim = i % head_size;
             float freq = 1.0f / std::pow(10000.0f, head_dim / (float)head_size);
             float val = pos * freq;
-            float fcr = std::cos(val);
-            float fci = std::sin(val);
+            float fcr = cos(val);
+            float fci = sin(val);
             int rotn = i < kv_dim ? 2 : 1;
             for (int v = 0; v < rotn; v++) {
                 float* vec = v == 0 ? s->q : s->k;
@@ -254,6 +293,7 @@ float* forward(Transformer* transformer, int token, int pos) {
             float* att = s->att + h * p->seq_len;
             for (int t = 0; t <= pos; t++) {
                 float* k = s->key_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
+
                 float score = 0.0f;
                 for (int i = 0; i < head_size; i++) {
                     score += q[i] * k[i];
@@ -263,6 +303,7 @@ float* forward(Transformer* transformer, int token, int pos) {
             }
             softmax(att, pos + 1);
             float* xb = s->xb + h * head_size;
+
             std::memset(xb, 0, head_size * sizeof(float));
             for (int t = 0; t <= pos; t++) {
                 float* v = s->value_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
@@ -300,9 +341,5 @@ float* forward(Transformer* transformer, int token, int pos) {
     matmul(s->logits, x, w->wcls, p->dim, p->vocab_size);
     return s->logits;
 }
-
-
-
-
 
 #endif

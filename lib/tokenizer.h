@@ -345,7 +345,6 @@ void generate(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, 
 
         float* logits = forward(transformer, token, pos);
 
- 
         if (pos < num_prompt_tokens - 1) {
             next = prompt_tokens[pos + 1];
         } else {
