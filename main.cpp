@@ -2,7 +2,7 @@
 #include "lib/tokenizer.h"
 
 int main() {
-    const char* checkpoint_path = "./llama-in-cpp/models/stories15M.bin";
+    const char* checkpoint_path = "./llama-in-cpp/models/pytorch_model.bin";
     const char* tokenizer_path = "./llama-in-cpp/models/tokenizer.bin";
 
 

@@ -328,7 +328,7 @@ void generate(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, 
     if (prompt == nullptr) {
         prompt = const_cast<char*>(empty_prompt);
     }
-
+    
     int num_prompt_tokens = 0;
     int* prompt_tokens = new int[strlen(prompt) + 3]; // +3 for '\0', ?BOS, ?EOS
     encode(tokenizer, prompt, 1, 0, prompt_tokens, &num_prompt_tokens);
@@ -345,6 +345,7 @@ void generate(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, 
 
         float* logits = forward(transformer, token, pos);
 
+ 
         if (pos < num_prompt_tokens - 1) {
             next = prompt_tokens[pos + 1];
         } else {

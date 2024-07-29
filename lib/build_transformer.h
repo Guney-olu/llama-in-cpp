@@ -144,7 +144,24 @@ void read_checkpoint(const char* checkpoint, Config& config, TransformerWeights&
     }
 
     int shared_weights = config.vocab_size > 0 ? 1 : 0;
-    config.vocab_size = abs(config.vocab_size);
+    //config.vocab_size = abs(config.vocab_size);
+
+    //overweritting the config fro tinyllama tests
+    config.vocab_size = 32000;
+    config.dim = 2048;
+    config.n_heads = 32;
+    config.n_kv_heads = 4;
+    config.n_layers = 22;
+    config.hidden_dim = 5632;
+    config.seq_len = 256;
+    
+    cout<<config.dim<<endl;
+    cout<<config.n_heads<<endl;
+    cout<<config.n_kv_heads<<endl;
+    cout<<config.vocab_size<<endl;
+    cout<<config.seq_len<<endl;
+    cout<<config.n_layers<<endl;
+    cout<<config.hidden_dim<<endl;
 
     file.seekg(0, ios::end);
     file_size = file.tellg();
